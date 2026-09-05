@@ -1,0 +1,5 @@
+- True Equator : The plane slicing the earth in half, directly perpendicular to the axis of rotation, at that instance.
+- Mean Equator: Earth's equator is not always constant. It keeps varying slightly due to the gravitational drift caused by Sun and Moon. Therefore, we consider mean equator, across a period of time (or we use Equator at a fixed position in time like the year J2000.0).
+- Ecliptic: The geometric plane traced by the earth around the sun annually.
+- True Equinox: The actual point of intersection between Ecliptic and True Equator.
+- Mean Equinox: The point of intersection between Ecliptic and Mean Equator.
