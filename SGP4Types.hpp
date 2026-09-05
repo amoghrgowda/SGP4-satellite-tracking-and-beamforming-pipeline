@@ -40,12 +40,12 @@ struct TLE{
     double meanMotionDDot;  // Second time derivative of mean motion
     
     // orbital parameters
-    double inclination;    // Radians (i_0)
-    double raan;           // Radians (\Omega_0)
-    double eccentricity;   // Dimensionless (e_0)
-    double argPerigee;     // Radians (\omega_0)
-    double meanAnomaly;    // Radians (M_0)
-    double meanMotion;     // Radians/min (n_0)
+    double inclination;    
+    double raan;           
+    double eccentricity; 
+    double argPerigee;     
+    double meanAnomaly;   
+    double meanMotion;     
     
     //Mission counter
     int revNumberAtEpoch;
