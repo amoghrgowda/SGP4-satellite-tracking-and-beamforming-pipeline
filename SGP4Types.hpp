@@ -10,7 +10,7 @@ struct Vector3D{
     double z {0.0};
 
     double norm() const{
-        std::sqrt(x*x + y*y + z*z); // we need this euclidean length (scalar length or wtv). 
+       return std::sqrt(x*x + y*y + z*z); // we need this euclidean length (scalar length or wtv). 
     }                               // This magnitude is helpful to calculate altitude of satellite and the orbital speed   
 };
 

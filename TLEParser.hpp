@@ -1,3 +1,7 @@
+#pragma once
+
+#include <string>
+#include <cmath>
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
@@ -9,7 +13,7 @@ namespace AstroStuff{
 class TLEParser{
 private:
     static constexpr double DEG_TO_RAD = std::numbers::pi / 180.0;
-    static constexpr double TWO_PI = std::numbers:pi * 2.0;
+    static constexpr double TWO_PI = std::numbers::pi * 2.0;
     static constexpr double MINUTES_PER_DAY = 1440.0;
 
     // Parses TLE data format into SGP4 expected decimal float format.

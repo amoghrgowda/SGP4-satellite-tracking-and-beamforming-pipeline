@@ -3,6 +3,8 @@
 #include <algorithm> // for std::clamp, which was introduced in cpp17 and snaps a value to particular range.
                      // useful for constraining the eccentricity (degree of deviation of our orbit from perfect circle) to a minimum>0, and max<1.
                      // <=0 means 'divide by zero' error. >1 means a parabolic or hyperbolic trajectory, and our newton-raphson formula goes into infinite loop.
+#include <cmath>
+#include <numbers>
 
 namespace AstroStuff{
 SGP4Propagator::SGP4Propagator(const TLE& tle, const GravitationalConstants& constants) : tle_(tle), consts_(constants){
@@ -11,6 +13,7 @@ SGP4Propagator::SGP4Propagator(const TLE& tle, const GravitationalConstants& con
 // next, we initialize the required fields (as per the specification in STR-3).
 void SGP4Propagator::initialize(){
     constexpr double ck2 = 0.5 * 0.001082616; // half of J2
+    constexpr double ck4 = 0.375 * 0.00000165597; // -3/8 * J4
     constexpr double twoThirds = 2.0/3.0;
 
     double a1 = std::pow(consts_.xke / tle_.meanMotion, twoThirds);
@@ -54,7 +57,7 @@ void SGP4Propagator::initialize(){
     c2_ = coef1 * n0_double_prime_ * (a0_double_prime_ * (1.0 + 1.5 * eta_ * eta_ + eeta * (4.0 + eta_ * eta_))
           + 0.75 * ck2 * tsi_ / psisq * x3thm1 * (8.0 + 3.0 * eta_ * eta_ * (8.0 + eta_ * eta_)));
     c1_ = tle_.bstar * c2_;
-    c3_ = (tle_.eccentricity > 1e-4) ? (coef * tsi_ * consts_.j3oj2 * n0_double_prime_ * consts_.radiusEarth * std::sin(tle_.inclination) / tle_.eccentricity) : 0.0;
+    c3_ = (tle_.eccentricity > 1e-4) ? (coef * tsi_ * consts_.j3oj2 * n0_double_prime_ * std::sin(tle_.inclination) / tle_.eccentricity) : 0.0;
     c4_ = 2.0 * n0_double_prime_ * coef1 * a0_double_prime_ * beta02 * (eta_ * (2.0 + 0.5 * eta_ * eta_) + tle_.eccentricity * (0.5 + 2.0 * eta_ * eta_)
           - 2.0 * ck2 * tsi_ / (a0_double_prime_ * psisq) * (-3.0 * x3thm1 * (1.0 - 2.0 * eeta + eta_ * eta_ * (1.5 - 0.5 * eeta))
           + 0.75 * (1.0 - theta2) * (2.0 * eta_ * eta_ - eeta * (1.0 + eta_ * eta_)) * std::cos(2.0 * tle_.argPerigee)));
@@ -63,7 +66,7 @@ void SGP4Propagator::initialize(){
     // Secular rates
     double temp1 = 3.0 * ck2 * pinvsq * n0_double_prime_;
     double temp2 = temp1 * ck2 * pinvsq;
-    double temp3 = 1.25 * 0.00000165597 * pinvsq * pinvsq * n0_double_prime_; // J4 term
+    double temp3 = 1.25 * ck4 * pinvsq * pinvsq * n0_double_prime_; // J4 term
 
     mDot_ = n0_double_prime_ + 0.5 * temp1 * beta0 * x3thm1 + 0.0625 * temp2 * beta0 * (13.0 - 78.0 * theta2 + 137.0 * theta2 * theta2);
     omegaDot_ = -0.5 * temp1 * (1.0 - 5.0 * theta2) + 0.0625 * temp2 * (7.0 - 114.0 * theta2 + 395.0 * theta2 * theta2) + temp3 * (3.0 - 36.0 * theta2 + 49.0 * theta2 * theta2);
@@ -75,6 +78,11 @@ void SGP4Propagator::initialize(){
 }
 
 double SGP4Propagator::solveKepler(double M, double e, double tol, int maxIter) {
+    // Normalise M to [-pi, pi]
+    M = std::fmod(M, 2.0 * std::numbers::pi);
+    if (M < -std::numbers::pi) M += 2.0 * std::numbers::pi;
+    if (M >  std::numbers::pi) M -= 2.0 * std::numbers::pi;
+
     double E = M;
     for (int i = 0; i < maxIter; ++i) {
         double f = E - e * std::sin(E) - M;
@@ -86,89 +94,128 @@ double SGP4Propagator::solveKepler(double M, double e, double tol, int maxIter) 
 }
 
 StateVector SGP4Propagator::propagate(double tsince) const {
-    // Secular updates
+    constexpr double ck2 = 0.5 * 0.001082616;
+
+    // Update secular terms
     double xmdf = tle_.meanAnomaly + mDot_ * tsince;
     double omgadf = tle_.argPerigee + omegaDot_ * tsince;
     double xnoddf = tle_.raan + omegamDot_ * tsince;
 
     double tsq = tsince * tsince;
-    double xnode = xnoddf + d2_ * tsq + d3_ * tsq * tsince + d4_ * tsq * tsq;
-    double tempa = 1.0 - (c1_ * tsince + d2_ * tsq + d3_ * tsq * tsince);
+    double xnode = xnoddf;
+
+    double tempa = 1.0 - (c1_ * tsince + d2_ * tsq + d3_ * tsq * tsince + d4_ * tsq * tsq);
     double tempe = tle_.bstar * (c4_ * tsince + c5_ * (std::sin(xmdf) - std::sin(tle_.meanAnomaly)));
-    double templ = 1.5 * c1_ * tsq; // secular drag L correction
+    double templ = 1.5 * c1_ * tsq;
 
     double a = a0_double_prime_ * tempa * tempa;
     double e = tle_.eccentricity - tempe;
     e = std::clamp(e, 1e-6, 0.999999);
 
-    double xl = xmdf + omgadf + xnode + n0_double_prime_ * templ;
-    double beta = std::sqrt(1.0 - e * e);
-    double n = consts_.xke / std::pow(a, 1.5);
+    double beta2 = 1.0 - e * e;
 
-    // long period periodic corrections (Lyddane)
-    double axn = e * std::cos(omgadf);
-    double ayn = e * std::sin(omgadf) - 0.5 * consts_.j3oj2 * std::sin(tle_.inclination) / (a * beta * beta);
-    double xl_long = xl - 0.25 * consts_.j3oj2 * std::sin(tle_.inclination) * axn * (3.0 + 5.0 * std::cos(tle_.inclination)) / (1.0 + std::cos(tle_.inclination));
-
-    // Solving Kepler for eccentric anomaly
-    double u = std::fmod(xl_long - xnode, 2.0 * std::numbers::pi);
-    double E = solveKepler(u, e);
-
-    // Short period perturbations & State Vector projection
-    double sinE = std::sin(E);
-    double cosE = std::cos(E);
-    double ecosE = e * cosE;
-    double esinE = e * sinE;
-
-    double r = a * (1.0 - ecosE);
-    double rDot = consts_.xke * std::sqrt(a) / r * esinE;
-    double rfDot = consts_.xke * std::sqrt(a * (1.0 - e * e)) / r;
-
-    // True anomaly & argument of latitude
-    double sinv = (std::sqrt(1.0 - e * e) * sinE) / (1.0 - ecosE);
-    double cosv = (cosE - e) / (1.0 - ecosE);
-    double v = std::atan2(sinv, cosv);
-    double u_lat = v + omgadf;
-
-    // Unit vectors in TEME orbital plane
-    double sin2u = std::sin(2.0 * u_lat);
-    double cos2u = std::cos(2.0 * u_lat);
-    double mr = r * (1.0 - 1.5 * 0.000541308 * (1.0 / (a * beta * beta)) * (3.0 * std::cos(tle_.inclination) * std::cos(tle_.inclination) - 1.0))
-              + 0.5 * 0.000541308 * (1.0 / (a * beta * beta)) * std::sin(tle_.inclination) * std::sin(tle_.inclination) * cos2u;
-
-    double sinu = std::sin(u_lat);
-    double cosu = std::cos(u_lat);
+    //Long period periodic terms (Lyddane)
     double sinI = std::sin(tle_.inclination);
     double cosI = std::cos(tle_.inclination);
-    double sinNode = std::sin(xnode);
-    double cosNode = std::cos(xnode);
 
-    // TEME unit orientation vectors
-    Vector3D P{
-        cosNode * cosu - sinNode * sinu * cosI,
-        sinNode * cosu + cosNode * sinu * cosI,
-        sinu * sinI
+    double axn = e * std::cos(omgadf);
+    double temp_lp = 0.5 * consts_.j3oj2 * sinI / (a * beta2);
+    double ayn = e * std::sin(omgadf) - temp_lp;
+    double xl = xmdf + omgadf + xnode + n0_double_prime_ * templ 
+                - 0.25 * consts_.j3oj2 * sinI / (a * beta2) * axn * (3.0 + 5.0 * cosI) / (1.0 + cosI);
+
+    // Solve Kepler equation for Mean Anomaly
+    // Mean anomaly recovered from mean longitude:
+    double u_mean = std::fmod(xl - xnode, 2.0 * std::numbers::pi);
+    if (u_mean < 0.0) u_mean += 2.0 * std::numbers::pi;
+
+    double epw = u_mean;
+    for (int i = 0; i < 15; ++i) {
+        double sinEpw = std::sin(epw);
+        double cosEpw = std::cos(epw);
+        double f = epw - axn * sinEpw + ayn * cosEpw - u_mean;
+        double fPrime = 1.0 - axn * cosEpw - ayn * sinEpw;
+        double delta = f / fPrime;
+        delta = std::clamp(delta, -0.95, 0.95);
+        epw -= delta;
+        if (std::abs(delta) < 1e-12) break;
+    }
+
+    double sinEpw = std::sin(epw);
+    double cosEpw = std::cos(epw);
+
+    double ecose = axn * cosEpw + ayn * sinEpw;
+    double esine = axn * sinEpw - ayn * cosEpw;
+    double el2 = axn * axn + ayn * ayn;
+    double pl = a * (1.0 - el2);
+
+    double rl = a * (1.0 - ecose);
+    double betal = std::sqrt(1.0 - el2);
+
+    // True anomaly & Argument of Latitude
+    double temp_sin = esine / (1.0 + betal);
+    double sinu = (a / rl) * (sinEpw - ayn - axn * temp_sin);
+    double cosu = (a / rl) * (cosEpw - axn + ayn * temp_sin);
+    double u = std::atan2(sinu, cosu); // True argument of latitude
+
+    // Short period perturbations (J2)
+    double sin2u = 2.0 * sinu * cosu;
+    double cos2u = 1.0 - 2.0 * sinu * sinu;
+
+    double temp_p = 1.0 / pl;
+    double temp1 = ck2 * temp_p;
+    double temp2 = temp1 * temp_p;
+
+    double x3thm1_val = 3.0 * cosI * cosI - 1.0;
+    double x7thm1_val = 7.0 * cosI * cosI - 1.0;
+    double x1mth2_val = 1.0 - cosI * cosI;
+
+    double rk = rl * (1.0 - 1.5 * temp2 * betal * x3thm1_val) + 0.5 * temp1 * x1mth2_val * cos2u;
+    double uk = u - 0.25 * temp2 * x7thm1_val * sin2u;
+    double xnodek = xnode + 1.5 * temp2 * cosI * sin2u;
+    double xinck = tle_.inclination + 1.5 * temp2 * cosI * sinI * cos2u;
+
+    //Unit vectors in TEME orbital plane
+    double sinUk = std::sin(uk);
+    double cosUk = std::cos(uk);
+    double sinNodek = std::sin(xnodek);
+    double cosNodek = std::cos(xnodek);
+    double sinInck = std::sin(xinck);
+    double cosInck = std::cos(xinck);
+
+    // Satellite position unit vector
+    Vector3D U{
+        -sinNodek * cosInck * sinUk + cosNodek * cosUk,
+         cosNodek * cosInck * sinUk + sinNodek * cosUk,
+         sinInck * sinUk
     };
 
-    Vector3D Q{
-        -cosNode * sinu - sinNode * cosu * cosI,
-        -sinNode * sinu + cosNode * cosu * cosI,
-        cosu * sinI
+    // Satellite in-plane transverse unit vector
+    Vector3D V{
+        -sinNodek * cosInck * cosUk - cosNodek * sinUk,
+         cosNodek * cosInck * cosUk - sinNodek * sinUk,
+         sinInck * cosUk
     };
 
-    // State vectors converted to km and km/s
+    // Output state vector
     StateVector state;
     state.position = {
-        mr * P.x * consts_.radiusEarth,
-        mr * P.y * consts_.radiusEarth,
-        mr * P.z * consts_.radiusEarth
+        rk * U.x * consts_.radiusEarth,
+        rk * U.y * consts_.radiusEarth,
+        rk * U.z * consts_.radiusEarth
     };
 
-    double vFactor = (consts_.radiusEarth * consts_.xke) / 60.0;
+    double rdotl = consts_.xke * std::sqrt(a) * esine / rl;
+    double rvdotl = consts_.xke * std::sqrt(pl) / rl;
+
+    double rdot = rdotl - n0_double_prime_ * temp1 * x1mth2_val * sin2u;
+    double rvdot = rvdotl + n0_double_prime_ * temp1 * (x1mth2_val * cos2u + 1.5 * x3thm1_val);
+    double vFactor = consts_.radiusEarth / 60.0;
+
     state.velocity = {
-        (rDot * P.x + rfDot * Q.x) * vFactor,
-        (rDot * P.y + rfDot * Q.y) * vFactor,
-        (rDot * P.z + rfDot * Q.z) * vFactor
+        (rdot * U.x + rvdot * V.x) * vFactor,
+        (rdot * U.y + rvdot * V.y) * vFactor,
+        (rdot * U.z + rvdot * V.z) * vFactor
     };
 
     return state;
